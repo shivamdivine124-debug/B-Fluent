@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
@@ -12,18 +11,8 @@
     
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <script>
-      // Safe process shim: Only set defaults if they don't exist
+      // Process shim for browser compatibility with process.env usage
       window.process = window.process || { env: {} };
-      window.process.env = window.process.env || {};
-      
-      const setIfEmpty = (key, val) => {
-        if (!window.process.env[key]) window.process.env[key] = val;
-      };
-
-      setIfEmpty('NODE_ENV', 'development');
-      // These will be used if the environment doesn't provide them
-      setIfEmpty('SUPABASE_URL', 'https://tydbsxzcpeabmmppjuut.supabase.co');
-      setIfEmpty('SUPABASE_ANON_KEY', 'sb_publishable_TcjSCNPiGy5uR4JArhAF1Q_DDErNWUP');
     </script>
     <style>
       :root {

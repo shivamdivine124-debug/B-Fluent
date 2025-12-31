@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import Layout from './components/Layout';
 import Auth from './features/Auth';
@@ -75,25 +74,35 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
+    let authListener: { subscription: { unsubscribe: () => void } } | null = null;
     
     const initAuth = async () => {
+      // If Supabase isn't configured, we skip attempting to get the session
       if (!isSupabaseConfigured) {
         setLoading(false);
         return;
       }
-      const { data: { session } } = await supabase.auth.getSession();
-      if (isMounted) handleAuthState(session);
+
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (isMounted) handleAuthState(session);
+
+        // Setup listener
+        const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+          if (isMounted) handleAuthState(session);
+        });
+        authListener = data;
+      } catch (error) {
+        console.error("Auth init failed:", error);
+        setLoading(false);
+      }
     };
 
     initAuth();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (isMounted) handleAuthState(session);
-    });
-
     return () => {
       isMounted = false;
-      subscription.unsubscribe();
+      if (authListener) authListener.subscription.unsubscribe();
     };
   }, [handleAuthState]);
 

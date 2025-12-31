@@ -10,8 +10,9 @@ export default defineConfig({
     outDir: 'dist',
   },
   define: {
-    'process.env.API_KEY': JSON.stringify(process.env.API_KEY),
-    'process.env.SUPABASE_URL': JSON.stringify(process.env.SUPABASE_URL),
-    'process.env.SUPABASE_ANON_KEY': JSON.stringify(process.env.SUPABASE_ANON_KEY),
+    // Stringify the env vars, defaulting to empty string if undefined to avoid build-time crashes or 'undefined' string literals
+    'process.env.API_KEY': JSON.stringify(process.env.API_KEY || ""),
+    'process.env.SUPABASE_URL': JSON.stringify(process.env.SUPABASE_URL || ""),
+    'process.env.SUPABASE_ANON_KEY': JSON.stringify(process.env.SUPABASE_ANON_KEY || ""),
   }
 });
