@@ -1,15 +1,43 @@
+
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="google-site-verification" content="google1b6f7dc22ecd84fb" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>B Fluent - Master English</title>
+    <title>B fluent - Master English</title>
+    
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script>
+      // Safe process shim: Only set defaults if they don't exist
+      window.process = window.process || { env: {} };
+      window.process.env = window.process.env || {};
+      
+      const setIfEmpty = (key, val) => {
+        if (!window.process.env[key]) window.process.env[key] = val;
+      };
+
+      setIfEmpty('NODE_ENV', 'development');
+      // These will be used if the environment doesn't provide them
+      setIfEmpty('SUPABASE_URL', 'https://tydbsxzcpeabmmppjuut.supabase.co');
+      setIfEmpty('SUPABASE_ANON_KEY', 'sb_publishable_TcjSCNPiGy5uR4JArhAF1Q_DDErNWUP');
+    </script>
     <style>
-      body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
-      /* Hide scrollbar for clean mobile look */
+      :root {
+        --brand-primary: #6366f1;
+        --brand-secondary: #8b5cf6;
+      }
+      body { 
+        font-family: 'Plus Jakarta Sans', sans-serif; 
+        background-color: #0a0c14; 
+        color: #ffffff;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+        overflow-x: hidden;
+      }
       .no-scrollbar::-webkit-scrollbar {
           display: none;
       }
@@ -17,16 +45,29 @@
           -ms-overflow-style: none;
           scrollbar-width: none;
       }
+      @keyframes float {
+        0% { transform: translateY(0px); }
+        50% { transform: translateY(-10px); }
+        100% { transform: translateY(0px); }
+      }
+      .animate-float {
+        animation: float 3s ease-in-out infinite;
+      }
     </style>
   <script type="importmap">
 {
   "imports": {
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.33.0",
-    "react-markdown": "https://esm.sh/react-markdown@^10.1.0",
-    "react/": "https://esm.sh/react@^19.2.3/",
     "react": "https://esm.sh/react@^19.2.3",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.88.0"
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react-dom": "https://esm.sh/react-dom@^19.2.3",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react-dom/client": "https://esm.sh/react-dom@^19.2.3/client",
+    "react-markdown": "https://esm.sh/react-markdown@^10.1.0",
+    "@google/genai": "https://esm.sh/@google/genai@^1.34.0",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.88.0",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "vite": "https://esm.sh/vite@^7.3.0",
+    "crypto-js": "https://esm.sh/crypto-js@4.2.0"
   }
 }
 </script>

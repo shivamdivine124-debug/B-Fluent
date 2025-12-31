@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { RAZORPAY_KEY_ID, SUBSCRIPTION_PLANS, SubscriptionPlan } from '../constants';
 import { User } from '../types';
@@ -54,7 +55,6 @@ const Subscription: React.FC<SubscriptionProps> = ({ user, onSuccess, onCancel }
           const rzp1 = new window.Razorpay(options);
           rzp1.open();
       } else {
-          // Fallback if SDK not loaded
           alert("Payment gateway currently unavailable. Please check your connection.");
           setLoading(false);
       }
@@ -112,10 +112,10 @@ const Subscription: React.FC<SubscriptionProps> = ({ user, onSuccess, onCancel }
                     <span className="text-green-400">✓</span> Unlimited AI Sonia Voice Chat
                 </li>
                 <li className="flex items-center gap-3 text-slate-300 text-sm">
-                    <span className="text-green-400">✓</span> 1-on-1 Global Human Voice Call
+                    <span className="text-green-400">✓</span> Complete 60-Day Spoken Course
                 </li>
                 <li className="flex items-center gap-3 text-slate-300 text-sm">
-                    <span className="text-green-400">✓</span> Complete 60-Day Spoken Course
+                    <span className="text-green-400">✓</span> Advanced Quiz Arena Access
                 </li>
             </ul>
         </div>

@@ -1,56 +1,114 @@
-import { GoogleGenAI, Type } from "@google/genai";
+
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { SYSTEM_PROMPTS } from '../constants';
 import { QuizQuestion } from '../types';
 
-/**
- * Service to interact with the Google GenAI API.
- * Following official @google/genai guidelines:
- * - Initialize inside functions to ensure fresh credentials.
- * - Use process.env.API_KEY directly.
- * - Use recommended models like 'gemini-3-flash-preview' and 'gemini-3-pro-preview'.
- * - Extract text output using the .text property.
- */
+const checkApiKey = (): boolean => {
+    if (!process.env.API_KEY || process.env.API_KEY.includes('your_api_key')) {
+        console.warn("Gemini API Key is missing or invalid.");
+        return false;
+    }
+    return true;
+};
 
 export const generateCourseDay = async (nativeLanguage: string, day: number): Promise<string> => {
-  // Always initialize client right before use
+  if (!checkApiKey()) return "Please configure your Google Gemini API Key in the application settings to generate lessons.";
+
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-3-flash-preview',
       contents: SYSTEM_PROMPTS.COURSE_GENERATOR(nativeLanguage, day),
+      config: {
+        thinkingConfig: { thinkingBudget: 0 }
+      }
     });
-    // Use response.text directly (property, not method)
     return response.text || "Failed to generate content.";
   } catch (error) {
     console.error("Gemini Course Error:", error);
-    return "Error generating course content. Please try again.";
+    return "The AI tutor is busy. Please try generating this lesson again.";
   }
 };
 
-export const getAiPartnerResponse = async (
+export const getAiSolverResponseStream = async (
+  userText: string,
+  history: {role: string, parts: {text: string}[]}[],
+  nativeLanguage: string,
+  onChunk: (text: string) => void
+): Promise<string> => {
+  if (!checkApiKey()) {
+      const msg = "Please set your API Key to use the Solver.";
+      onChunk(msg);
+      return msg;
+  }
+
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+  try {
+    const systemInstruction = SYSTEM_PROMPTS.AI_SOLVER(nativeLanguage);
+
+    // COST OPTIMIZATION: Keep only the last 10 turns for problem solving context
+    const recentHistory = history.slice(-10);
+
+    const cleanHistory = recentHistory.map(h => ({
+      role: h.role,
+      parts: h.parts
+    }));
+
+    const chat = ai.chats.create({
+      model: 'gemini-3-flash-preview',
+      config: {
+        systemInstruction: systemInstruction,
+        thinkingConfig: { thinkingBudget: 0 }
+      },
+      history: cleanHistory,
+    });
+
+    const result = await chat.sendMessageStream({ message: userText });
+    let fullText = "";
+    
+    for await (const chunk of result) {
+      const c = chunk as GenerateContentResponse;
+      const text = c.text || "";
+      fullText += text;
+      onChunk(fullText);
+    }
+
+    return fullText;
+  } catch (error) {
+    console.error("Gemini Solver Error:", error);
+    const err = "Sorry, I am unable to process your request at the moment.";
+    onChunk(err);
+    return err;
+  }
+};
+
+export const getAiPartnerResponseStream = async (
   userText: string, 
   history: {role: string, parts: {text: string}[]}[],
-  nativeLanguage?: string
+  nativeLanguage: string,
+  onChunk: (text: string) => void
 ): Promise<string> => {
-  // Always initialize client right before use
+  if (!checkApiKey()) {
+      const msg = "Please set your API Key to chat with Sonia.";
+      onChunk(msg);
+      return msg;
+  }
+
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   try {
     let systemInstruction = SYSTEM_PROMPTS.AI_PARTNER;
-    
     if (nativeLanguage) {
-      systemInstruction += `\n\nIMPORTANT: You are speaking to a native ${nativeLanguage} speaker learning English.
-      1. Respond in natural, conversational English.
-      2. If the user makes a mistake, correct them gently in English.
-      3. At the very end of your response, provide a translation of your English response in ${nativeLanguage}.
-      4. Separate the English response and the translation with the delimiter "|||".
-      5. Example format: "That is great to hear!|||[Translation in ${nativeLanguage}]"
-      `;
+      systemInstruction += `\n\nIMPORTANT: Use ${nativeLanguage} for translations at the end of your response after "|||" separator.`;
     }
 
-    // Clean history: Remove previous translations (after |||) from model messages.
-    const cleanHistory = history.map(h => ({
+    // COST OPTIMIZATION: Keep only the last 15 turns to prevent token usage explosion
+    const MAX_HISTORY = 15;
+    const recentHistory = history.slice(-MAX_HISTORY);
+
+    const cleanHistory = recentHistory.map(h => ({
       role: h.role,
       parts: h.parts.map(p => ({
         text: h.role === 'model' ? p.text.split('|||')[0] : p.text
@@ -61,24 +119,64 @@ export const getAiPartnerResponse = async (
       model: 'gemini-3-flash-preview',
       config: {
         systemInstruction: systemInstruction,
+        thinkingConfig: { thinkingBudget: 0 }
       },
       history: cleanHistory,
     });
 
-    const result = await chat.sendMessage({ message: userText });
-    // Use result.text directly
-    const rawText = result.text || "I didn't catch that.";
+    const result = await chat.sendMessageStream({ message: userText });
+    let fullText = "";
+    
+    for await (const chunk of result) {
+      const c = chunk as GenerateContentResponse;
+      const text = c.text || "";
+      fullText += text;
+      // Filter out markdown emphasis for TTS/UI compatibility immediately
+      onChunk(fullText.replace(/\*\*/g, '"'));
+    }
 
-    // Replace ** with " to clean up any markdown that might leak through
-    return rawText.replace(/\*\*/g, '"');
+    return fullText.replace(/\*\*/g, '"');
   } catch (error) {
-    console.error("Gemini Chat Error:", error);
+    console.error("Gemini Stream Chat Error:", error);
     return "Sorry, I'm having trouble connecting right now.";
   }
 };
 
+export const getAiPartnerResponse = async (
+  userText: string, 
+  history: {role: string, parts: {text: string}[]}[],
+  nativeLanguage?: string
+): Promise<string> => {
+  if (!checkApiKey()) return "API Key Missing";
+
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+  try {
+    let systemInstruction = SYSTEM_PROMPTS.AI_PARTNER;
+    
+    // COST OPTIMIZATION: Keep only the last 15 turns
+    const recentHistory = history.slice(-15);
+    
+    const chat = ai.chats.create({
+      model: 'gemini-3-flash-preview',
+      config: { 
+        systemInstruction,
+        thinkingConfig: { thinkingBudget: 0 }
+      },
+      history: recentHistory.map(h => ({ role: h.role, parts: h.parts }))
+    });
+
+    const result = await chat.sendMessage({ message: userText });
+    return result.text || "I didn't catch that.";
+  } catch (error) {
+    console.error("Gemini Chat Error:", error);
+    return "Error connecting to Sonia.";
+  }
+};
+
 export const generateQuizQuestions = async (level: number): Promise<QuizQuestion[]> => {
-  // Always initialize client right before use
+  if (!checkApiKey()) return [];
+
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   try {
@@ -87,7 +185,7 @@ export const generateQuizQuestions = async (level: number): Promise<QuizQuestion
       contents: SYSTEM_PROMPTS.QUIZ_GENERATOR(level),
       config: {
         responseMimeType: 'application/json',
-        // Use responseSchema for robust structured data output
+        thinkingConfig: { thinkingBudget: 0 },
         responseSchema: {
           type: Type.ARRAY,
           items: {
@@ -101,14 +199,12 @@ export const generateQuizQuestions = async (level: number): Promise<QuizQuestion
               },
               correctIndex: { type: Type.INTEGER }
             },
-            required: ['id', 'question', 'options', 'correctIndex'],
-            propertyOrdering: ['id', 'question', 'options', 'correctIndex']
+            required: ['id', 'question', 'options', 'correctIndex']
           }
         }
       }
     });
 
-    // Use response.text directly
     const text = response.text || "[]";
     return JSON.parse(text) as QuizQuestion[];
   } catch (error) {

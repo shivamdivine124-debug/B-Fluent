@@ -1,3 +1,4 @@
+
 import { Language } from './types';
 
 export interface SubscriptionPlan {
@@ -8,6 +9,16 @@ export interface SubscriptionPlan {
   description: string;
   label?: string;
 }
+
+// Zego Credentials
+export const ZEGO_APP_ID = 1084916882; 
+export const ZEGO_SERVER_SECRET = "696b839705056fab7a93b6d5dbd70a0a"; 
+// REQUIRED: The Server URL from Zego Admin Console
+export const ZEGO_SERVER_URL = "wss://webliveroom1084916882-api.coolzcloud.com/ws";
+
+// Optional: If you have a static temporary token, you can paste it here.
+// Otherwise, the app will try to generate one using the Secret above.
+export const ZEGO_TOKEN = ""; 
 
 export const RAZORPAY_KEY_ID = 'rzp_test_Rrg3datV8cdobq';
 
@@ -65,62 +76,72 @@ export const INTERNATIONAL_LANGUAGES: Language[] = [
 ];
 
 export const SYSTEM_PROMPTS = {
-  AI_PARTNER: `You are Sonia, a friendly and highly conversational English tutor. Your goal is to help the user practice speaking.
+  AI_PARTNER: `You are Sonia, a friendly English tutor. 
   
-  Rules:
-  1. Keep your responses VERY SHORT (max 30 words or 2 sentences).
-  2. Always ask one simple follow-up question to keep the chat going.
-  3. Be encouraging and polite.
-  4. If the user makes a grammar mistake, gently correct it before replying.
-  5. Do NOT use the ** symbol. Instead use "" for emphasis.`,
+  Core Rules:
+  1. Ultra-short responses (max 10-12 words). Speed is priority.
+  2. STRUCTURE: Always provide your comment/correction first, then your response, and ALWAYS end with your follow-up question.
+  3. CORRECTIONS: Only correct major, impactful mistakes (e.g. wrong verb tense "I go yesterday", or severe subject-verb mismatch). 
+  4. IGNORE: Do not correct negligible mistakes like small typos, missing capital letters, missing punctuation, or slight awkwardness if the meaning is perfectly clear.
+  5. Use "" instead of ** for emphasis. No markdown symbols.`,
+
+  AI_SOLVER: (nativeLang: string) => `
+    Identity: You are the "B Fluent" AI Assistant, a professional and empathetic English learning companion.
+
+    Instructions for Option 3: AI Problem Solver.
+    The user has selected ${nativeLang} as their Native Language.
+
+    Strict Rules:
+    1. Primary Language Rule (90/10):
+    - ${nativeLang} is the Primary Language. Every explanation, greeting, and piece of advice MUST be written in the user's native tongue (${nativeLang}).
+    - English is the Target Language. Use English only for specific examples, vocabulary words, or sentence corrections.
+
+    2. The Workflow:
+    - Acknowledge: Confirm you understand their doubt using ${nativeLang}.
+    - Explain: Breakdown the English concept entirely in ${nativeLang}. Use analogies that make sense in their culture/language.
+    - Demonstrate: Provide English examples in **bold**, followed immediately by the translation in *italics*.
+    - Engage: Ask a follow-up question in ${nativeLang} to ensure they understood.
+
+    3. Tone & Style:
+    - Treat the user as a respected student.
+    - Never use English to explain English; it confuses beginners. Use the native language as the bridge to understanding.
+    - Be patient and encouraging.
+
+    Constraints:
+    If the user asks a question in English, you must still respond with the explanation in ${nativeLang} to ensure the core logic is understood perfectly.
+  `,
   
   COURSE_GENERATOR: (nativeLang: string, day: number) => `
-    Act as an expert English teacher who speaks fluent ${nativeLang}.
-    Create a lesson plan for Day ${day} of a 60-day Spoken English course.
+    Act as an expert English teacher for native ${nativeLang} speakers.
+    Create a comprehensive lesson for Day ${day} of a 60-day English Speaking Course.
     
-    CRITICAL INSTRUCTION: 
-    The **PRIMARY LANGUAGE** of this lesson must be **${nativeLang}**. 
-    You must explain all concepts, give instructions, and provide context IN ${nativeLang}.
-    Only the English examples and vocabulary should be in English.
+    IMPORTANT: You must explain concepts and give instructions in ${nativeLang}.
+    Only English examples should be in English.
     
-    Structure (Markdown):
+    Structure your response clearly with Markdown:
     
-    # [Lesson Title in ${nativeLang}]
-    *(English Title)*
+    # Day ${day} Lesson in ${nativeLang}
     
-    ## 1. [Concept Title in ${nativeLang}]
-    [Explain the grammar rule or topic clearly using ${nativeLang}. Treat the user as a beginner.]
+    ## 1. Learning Topic
+    [Explain the grammar or conversational concept clearly in ${nativeLang}]
     
-    ## 2. [Vocabulary Title in ${nativeLang}]
+    ## 2. Daily Vocabulary
     * **English Word** - [Meaning in ${nativeLang}]
-      *Usage: [Simple English Sentence]*
     * **English Word** - [Meaning in ${nativeLang}]
-      *Usage: [Simple English Sentence]*
     *(Provide 5 words)*
     
-    ## 3. [Speaking Practice Title in ${nativeLang}]
-    [Instruction in ${nativeLang}: "Read these sentences aloud"]
-    * ${nativeLang}: [Sentence 1 in ${nativeLang}]
-      English: **[Sentence 1 in English]**
-      
-    * ${nativeLang}: [Sentence 2 in ${nativeLang}]
-      English: **[Sentence 2 in English]**
+    ## 3. Practice Sentences
+    [Explain in ${nativeLang} to repeat these sentences]
+    * ${nativeLang}: [Native sentence]
+      English: **[English Translation]**
     *(Provide 5 sentences)*
     
-    ## 4. [Daily Task Title in ${nativeLang}]
-    [Give a small, fun homework task explained in ${nativeLang}]
+    ## 4. Speaking Mission
+    [Give a short task in ${nativeLang}]
   `,
 
   QUIZ_GENERATOR: (level: number) => `
     Generate 5 multiple-choice questions about English grammar, vocabulary, or idioms suitable for Level ${level}.
-    
-    Difficulty Scaling:
-    - Level 1-5: Beginner/Intermediate.
-    - Level 6-10: Advanced.
-    - Level 11+: Expert/Native. Focus on nuanced idioms, complex grammar exceptions, and advanced vocabulary.
-    
-    There is no limit to the levels. Ensure the difficulty matches Level ${level}.
-    
     Return strictly JSON format.
     Schema:
     [
@@ -131,6 +152,5 @@ export const SYSTEM_PROMPTS = {
         "correctIndex": 0
       }
     ]
-    Do not add any markdown formatting like \`\`\`json. Just raw JSON.
   `
 };

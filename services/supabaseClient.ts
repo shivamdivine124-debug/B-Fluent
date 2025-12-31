@@ -1,19 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Helper to safely access process.env without crashing in browsers without polyfills
-const getEnv = (key: string) => {
-  try {
-    // @ts-ignore
-    return typeof process !== 'undefined' && process.env ? process.env[key] : undefined;
-  } catch (e) {
-    return undefined;
-  }
-};
+// Accessing environment variables set in index.html or by the build tool
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 
-// Supabase Credentials
-const SUPABASE_URL = getEnv('SUPABASE_URL') || 'https://tydbsxzcpeabmmppjuut.supabase.co';
-const SUPABASE_ANON_KEY = getEnv('SUPABASE_ANON_KEY') || 'sb_publishable_TcjSCNPiGy5uR4JArhAF1Q_DDErNWUP';
+export const isSupabaseConfigured = SUPABASE_URL.includes('supabase.co');
 
-export const isSupabaseConfigured = SUPABASE_URL !== 'https://placeholder.supabase.co';
+if (!isSupabaseConfigured) {
+  console.warn("Supabase is not yet configured. Some features may be limited.");
+}
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);

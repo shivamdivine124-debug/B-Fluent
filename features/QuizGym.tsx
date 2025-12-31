@@ -6,33 +6,24 @@ import { QuizQuestion } from '../types';
 type QuizMode = 'MENU' | 'MULTI_MENU' | 'LOBBY_HOST' | 'LOBBY_JOIN' | 'PLAYING' | 'LEVEL_SUMMARY';
 
 const QuizGym: React.FC = () => {
-  // Navigation State
   const [appState, setAppState] = useState<QuizMode>('MENU');
-  
-  // Game Data
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [level, setLevel] = useState(1);
   const [score, setScore] = useState(0);
   const [currentQIndex, setCurrentQIndex] = useState(0);
-  
-  // Interaction State
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [isAnswered, setIsAnswered] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  
-  // Multiplayer State
   const [channel, setChannel] = useState<any>(null);
   const [roomCode, setRoomCode] = useState('');
   const [joinInput, setJoinInput] = useState('');
-
-  // --- Actions ---
 
   const startSoloGame = async (startLevel: number) => {
     setLoading(true);
     const q = await generateQuizQuestions(startLevel);
     if (q.length === 0) {
-        setError("Failed to load questions. Try again.");
+        setError("Gym closed. Maintenance in progress.");
         setLoading(false);
         return;
     }
@@ -45,60 +36,35 @@ const QuizGym: React.FC = () => {
     setLoading(false);
   };
 
-  const nextLevel = () => {
-      // Unlimited levels: just increment and generate
-      startSoloGame(level + 1);
-  };
+  const nextLevel = () => startSoloGame(level + 1);
 
   const hostGame = async () => {
     if (!isSupabaseConfigured) {
-        setError("Multiplayer unavailable (Backend not configured)");
+        setError("Multiplayer requires active server.");
         return;
     }
-    
-    // Generate 4 digit code
     const code = Math.floor(1000 + Math.random() * 9000).toString();
     setRoomCode(code);
     setAppState('LOBBY_HOST');
-
     const newChannel = supabase.channel(`quiz-room-${code}`);
-    
-    // Listen for player join
     newChannel.on('broadcast', { event: 'player_joined' }, async () => {
         setLoading(true);
-        // Generate questions for the match (Start at Level 1 for fair play)
         const q = await generateQuizQuestions(1);
-        
-        // Broadcast start
-        newChannel.send({
-            type: 'broadcast',
-            event: 'start_quiz',
-            payload: { questions: q }
-        });
-        
+        newChannel.send({ type: 'broadcast', event: 'start_quiz', payload: { questions: q } });
         setQuestions(q);
         setLevel(1);
         setCurrentQIndex(0);
         setAppState('PLAYING');
         setLoading(false);
     }).subscribe();
-
     setChannel(newChannel);
   };
 
   const joinGame = async () => {
-    if (!isSupabaseConfigured) {
-        setError("Multiplayer unavailable (Backend not configured)");
-        return;
-    }
-    if (joinInput.length !== 4) {
-        setError("Please enter a valid 4-digit code.");
-        return;
-    }
-    
+    if (!isSupabaseConfigured) return;
+    if (joinInput.length !== 4) return;
     setLoading(true);
     const newChannel = supabase.channel(`quiz-room-${joinInput}`);
-    
     newChannel.on('broadcast', { event: 'start_quiz' }, ({ payload }) => {
         setQuestions(payload.questions);
         setLevel(1);
@@ -107,111 +73,68 @@ const QuizGym: React.FC = () => {
         setLoading(false);
     }).subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-            // Tell host we are here
-            newChannel.send({
-                type: 'broadcast',
-                event: 'player_joined',
-                payload: {}
-            });
+            newChannel.send({ type: 'broadcast', event: 'player_joined', payload: {} });
         }
     });
-
     setChannel(newChannel);
-    // Stay in loading state until game starts
   };
 
   const handleAnswer = (index: number) => {
     if (isAnswered) return;
-
     setSelectedOption(index);
     setIsAnswered(true);
-
-    const isCorrect = index === questions[currentQIndex].correctIndex;
-
-    if (isCorrect) {
-      setScore(s => s + 10);
-    }
-
-    // Auto Advance Logic
-    setTimeout(() => {
-        advanceToNext();
-    }, 1200); 
+    if (index === questions[currentQIndex].correctIndex) setScore(s => s + 10);
+    setTimeout(() => advanceToNext(), 1200); 
   };
 
   const advanceToNext = () => {
       if (currentQIndex < questions.length - 1) {
-          // Next Question
           setCurrentQIndex(prev => prev + 1);
           setIsAnswered(false);
           setSelectedOption(null);
       } else {
-          // End of Level
           setAppState('LEVEL_SUMMARY');
           setIsAnswered(false);
           setSelectedOption(null);
-          // Cleanup multiplayer channel if active
-          if (channel) {
-              supabase.removeChannel(channel);
-              setChannel(null);
-          }
+          if (channel) { supabase.removeChannel(channel); setChannel(null); }
       }
   };
 
-  // --- Render ---
-
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full bg-indigo-900 text-white">
-        <div className="animate-spin text-5xl mb-6">🏋️</div>
-        <p className="font-bold text-lg animate-pulse">
-            {appState === 'LOBBY_JOIN' || (appState === 'LOBBY_HOST' && loading) 
-                ? "Connecting to Room..." 
-                : `Generating Level ${level}...`}
-        </p>
+      <div className="flex flex-col items-center justify-center h-full bg-slate-50 text-slate-800">
+        <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-8"></div>
+        <p className="font-black text-xl tracking-tight uppercase">Loading Arena...</p>
       </div>
     );
   }
 
   if (appState === 'MENU') {
     return (
-      <div className="p-6 flex flex-col items-center justify-center h-full bg-indigo-900 text-white overflow-y-auto">
-        <h1 className="text-5xl font-black mb-2 italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500">THE GYM</h1>
-        <p className="mb-10 text-indigo-300 tracking-widest text-sm font-bold uppercase">Brain Workout Center</p>
-        
-        {error && (
-            <div className="mb-4 bg-red-500/80 px-4 py-3 rounded-lg text-sm font-bold animate-pulse w-full max-w-xs text-center shadow-lg">
-                {error}
-                <button onClick={() => setError('')} className="ml-2 underline">Dismiss</button>
+      <div className="p-8 flex flex-col items-center justify-center h-full bg-slate-50 relative">
+        <div className="text-center mb-16 relative z-10">
+            <div className="inline-block p-4 bg-white rounded-3xl mb-6 shadow-xl animate-float">
+                <span className="text-4xl">🏋️</span>
             </div>
-        )}
+            <h1 className="text-5xl font-black tracking-tighter mb-2 text-slate-900">Quiz Gym</h1>
+            <p className="text-indigo-500 font-black text-[10px] uppercase tracking-[0.4em]">Test Your Power</p>
+        </div>
 
-        <div className="space-y-6 w-full max-w-xs">
-            {/* Single Player Button */}
+        <div className="space-y-4 w-full max-w-xs relative z-10">
             <button 
                 onClick={() => startSoloGame(1)}
-                className="group w-full p-6 bg-white rounded-2xl shadow-[0_6px_0_rgb(203,213,225)] hover:shadow-[0_4px_0_rgb(203,213,225)] hover:translate-y-[2px] active:shadow-none active:translate-y-[6px] transition-all text-left relative overflow-hidden"
+                className="w-full p-6 bg-white border border-slate-100 rounded-[2.5rem] shadow-lg hover:border-indigo-500 transition-all text-left"
             >
-               <div className="relative z-10 flex items-center justify-between">
-                   <div>
-                       <h3 className="text-2xl font-black text-indigo-900">Single Player</h3>
-                       <p className="text-indigo-500 font-medium text-sm">Unlimited Levels</p>
-                   </div>
-                   <span className="text-4xl">👤</span>
-               </div>
+               <h3 className="text-xl font-black text-slate-800 tracking-tight">SOLO GRIND</h3>
+               <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-1">Single Player Path</p>
             </button>
 
-            {/* Multiplayer Button */}
             <button 
                 onClick={() => setAppState('MULTI_MENU')}
-                className="group w-full p-6 bg-indigo-800 rounded-2xl shadow-[0_6px_0_rgb(49,46,129)] hover:shadow-[0_4px_0_rgb(49,46,129)] hover:translate-y-[2px] active:shadow-none active:translate-y-[6px] transition-all text-left relative overflow-hidden border-2 border-indigo-700"
+                className="w-full p-6 bg-slate-900 rounded-[2.5rem] shadow-xl text-left"
             >
-               <div className="relative z-10 flex items-center justify-between">
-                   <div>
-                       <h3 className="text-2xl font-black text-white">Multiplayer</h3>
-                       <p className="text-indigo-300 font-medium text-sm">Play with Friends</p>
-                   </div>
-                   <span className="text-4xl">👥</span>
-               </div>
+               <h3 className="text-xl font-black text-white tracking-tight">MULTIPLAYER</h3>
+               <p className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-1">Fight with Peers</p>
             </button>
         </div>
       </div>
@@ -220,36 +143,12 @@ const QuizGym: React.FC = () => {
 
   if (appState === 'MULTI_MENU') {
       return (
-        <div className="p-6 flex flex-col items-center justify-center h-full bg-indigo-900 text-white">
-            <button onClick={() => setAppState('MENU')} className="text-indigo-300 text-sm font-bold mb-6 hover:text-white flex items-center absolute top-6 left-6">
-                ← Back
-            </button>
-            
-            <h2 className="text-3xl font-black text-white mb-2">Multiplayer</h2>
-            <p className="text-indigo-300 mb-8 font-medium">Connect with a unique code</p>
-
+        <div className="p-8 flex flex-col items-center justify-center h-full bg-slate-50">
+            <button onClick={() => setAppState('MENU')} className="text-slate-400 text-[10px] font-black uppercase tracking-[0.3em] absolute top-20 left-8">← Back</button>
+            <h2 className="text-3xl font-black text-slate-900 mb-10 tracking-tight">Arena Mode</h2>
             <div className="w-full max-w-xs space-y-4">
-                <button 
-                    onClick={hostGame}
-                    className="w-full py-5 bg-gradient-to-r from-purple-500 to-indigo-500 text-white font-black text-lg rounded-2xl shadow-lg hover:scale-105 transition transform"
-                >
-                    Create Room (Host)
-                </button>
-                
-                <div className="relative py-2 flex items-center">
-                    <div className="flex-grow border-t border-indigo-700"></div>
-                    <span className="flex-shrink mx-4 text-indigo-400 text-xs uppercase font-bold">OR</span>
-                    <div className="flex-grow border-t border-indigo-700"></div>
-                </div>
-
-                <div className="bg-indigo-800 p-1 rounded-2xl border border-indigo-700">
-                    <button 
-                        onClick={() => setAppState('LOBBY_JOIN')}
-                        className="w-full py-4 bg-indigo-700 text-indigo-100 font-bold rounded-xl hover:bg-indigo-600 transition"
-                    >
-                        Join Room
-                    </button>
-                </div>
+                <button onClick={hostGame} className="w-full py-5 bg-indigo-600 text-white font-black text-lg rounded-3xl shadow-lg active:scale-[0.98] transition-all">Create Room</button>
+                <button onClick={() => setAppState('LOBBY_JOIN')} className="w-full py-5 bg-white border border-slate-200 text-slate-900 font-black text-lg rounded-3xl">Join Room</button>
             </div>
         </div>
       );
@@ -257,27 +156,17 @@ const QuizGym: React.FC = () => {
 
   if (appState === 'LOBBY_HOST') {
       return (
-        <div className="p-6 flex flex-col items-center justify-center h-full bg-indigo-900 text-white relative overflow-hidden">
-            {/* Background animation */}
-            <div className="absolute inset-0 flex items-center justify-center opacity-10">
-                 <div className="w-64 h-64 bg-purple-500 rounded-full animate-ping"></div>
-            </div>
-
-            <button onClick={() => { supabase.removeChannel(channel); setAppState('MULTI_MENU'); }} className="z-10 text-indigo-300 text-sm font-bold mb-6 hover:text-white flex items-center absolute top-6 left-6">
-                ← Cancel
-            </button>
-
-            <div className="z-10 flex flex-col items-center">
-                <p className="text-indigo-300 text-sm font-bold uppercase tracking-widest mb-4">Room Code</p>
-                <div className="bg-white text-indigo-900 text-6xl font-black py-6 px-10 rounded-3xl shadow-2xl mb-8 tracking-widest border-4 border-indigo-300">
+        <div className="p-8 flex flex-col items-center justify-center h-full bg-slate-50 relative">
+            <button onClick={() => setAppState('MULTI_MENU')} className="text-slate-400 text-[10px] font-black uppercase tracking-[0.3em] absolute top-20 left-8">← Cancel</button>
+            <div className="text-center">
+                <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.5em] mb-4">Share Room Code</p>
+                <div className="bg-white border-2 border-slate-100 text-slate-900 text-7xl font-black py-8 px-12 rounded-[3rem] shadow-2xl mb-12 tracking-[0.2em]">
                     {roomCode}
                 </div>
-                
-                <div className="flex items-center gap-3 bg-indigo-800/50 px-6 py-3 rounded-full backdrop-blur-sm">
-                    <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
-                    <span className="font-bold">Waiting for opponent...</span>
+                <div className="flex items-center gap-3 justify-center">
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping"></div>
+                    <span className="text-xs font-black uppercase tracking-widest text-slate-500">Waiting for players...</span>
                 </div>
-                <p className="mt-8 text-xs text-indigo-400 max-w-[200px] text-center">Share this code with your friend to start the quiz.</p>
             </div>
         </div>
       );
@@ -285,30 +174,20 @@ const QuizGym: React.FC = () => {
 
   if (appState === 'LOBBY_JOIN') {
       return (
-        <div className="p-6 flex flex-col items-center justify-center h-full bg-indigo-900 text-white">
-             <button onClick={() => setAppState('MULTI_MENU')} className="text-indigo-300 text-sm font-bold mb-6 hover:text-white flex items-center absolute top-6 left-6">
-                ← Back
-            </button>
-
-            <h2 className="text-2xl font-black text-white mb-6">Enter Room Code</h2>
-            
+        <div className="p-8 flex flex-col items-center justify-center h-full bg-slate-50">
+             <button onClick={() => setAppState('MULTI_MENU')} className="text-slate-400 text-[10px] font-black uppercase tracking-[0.3em] absolute top-20 left-8">← Back</button>
+            <h2 className="text-2xl font-black text-slate-900 mb-8 tracking-tight">Join Arena</h2>
             <input 
-                type="text" 
-                maxLength={4}
-                value={joinInput}
+                type="text" maxLength={4} value={joinInput}
                 onChange={(e) => setJoinInput(e.target.value.replace(/[^0-9]/g, ''))}
                 placeholder="0000"
-                className="w-48 bg-indigo-800 border-2 border-indigo-600 text-white text-center text-4xl font-black py-4 rounded-2xl outline-none focus:border-purple-400 focus:ring-4 focus:ring-purple-400/20 transition-all placeholder-indigo-600/50 tracking-widest mb-6"
+                className="w-full max-w-[200px] bg-white border-2 border-slate-100 text-slate-900 text-center text-5xl font-black py-6 rounded-3xl outline-none focus:border-indigo-500 transition-all mb-8"
             />
-            
-            {error && <p className="text-red-400 text-sm font-bold mb-4">{error}</p>}
-
             <button 
-                onClick={joinGame}
-                disabled={joinInput.length !== 4}
-                className="w-48 py-4 bg-green-500 text-white font-bold rounded-xl shadow-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition transform"
+                onClick={joinGame} disabled={joinInput.length !== 4}
+                className="w-full max-w-[200px] py-5 bg-indigo-600 text-white font-black text-xl rounded-3xl shadow-xl disabled:opacity-30 transition-all active:scale-95"
             >
-                Connect & Play
+                Enter
             </button>
         </div>
       );
@@ -316,30 +195,21 @@ const QuizGym: React.FC = () => {
 
   if (appState === 'LEVEL_SUMMARY') {
       return (
-        <div className="flex flex-col items-center justify-center h-full bg-indigo-50 p-6 text-center">
-            <div className="mb-8">
-                <span className="text-6xl">🏆</span>
+        <div className="flex flex-col items-center justify-center h-full bg-white p-8 text-center relative overflow-hidden">
+            <div className="mb-10 text-6xl">🏆</div>
+            <h2 className="text-4xl font-black text-slate-900 mb-3 tracking-tight">Workout Complete</h2>
+            <p className="text-slate-500 font-medium mb-10">You've finished Level {level}.</p>
+            <div className="bg-slate-50 p-8 rounded-[3rem] w-full max-w-xs mb-10 border border-slate-100">
+                <p className="text-[10px] text-slate-400 uppercase font-black tracking-[0.3em] mb-2">Total Gains</p>
+                <p className="text-6xl font-black text-indigo-600">{score}</p>
             </div>
-            <h2 className="text-3xl font-black text-indigo-900 mb-2">Level {level} Complete!</h2>
-            <p className="text-gray-600 mb-8">You answered 5 questions.</p>
-            
-            <div className="bg-white p-6 rounded-2xl shadow-lg w-full max-w-xs mb-8">
-                <p className="text-xs text-gray-400 uppercase font-bold tracking-wider mb-1">Total Score</p>
-                <p className="text-5xl font-black text-green-500">{score}</p>
-            </div>
-            
             <button 
                 onClick={nextLevel}
-                className="w-full max-w-xs py-4 bg-indigo-600 text-white font-bold rounded-xl shadow-lg hover:bg-indigo-700 hover:scale-105 transition transform"
+                className="w-full max-w-xs py-5 bg-slate-900 text-white font-black text-lg rounded-[2rem] shadow-xl active:scale-[0.98] transition-all"
             >
-                Start Level {level + 1} →
+                Next Level →
             </button>
-            <button 
-                onClick={() => { setAppState('MENU'); setScore(0); setLevel(1); }}
-                className="mt-4 text-gray-400 font-bold text-sm hover:text-gray-600"
-            >
-                Return to Menu
-            </button>
+            <button onClick={() => { setAppState('MENU'); setScore(0); setLevel(1); }} className="mt-8 text-slate-400 font-black text-[10px] uppercase tracking-[0.3em]">Exit Gym</button>
         </div>
       );
   }
@@ -347,66 +217,42 @@ const QuizGym: React.FC = () => {
   const currentQ = questions[currentQIndex];
 
   return (
-    <div className="flex flex-col h-full bg-indigo-50 p-4 relative">
-      {/* Top Bar */}
-      <div className="flex justify-between items-center mb-4 bg-white p-4 rounded-2xl shadow-sm">
+    <div className="flex flex-col h-full bg-slate-50 p-6 relative">
+      <div className="flex justify-between items-end mb-8 pt-16 px-2">
         <div>
-           <span className="text-[10px] text-gray-400 uppercase font-bold tracking-wider block">Level {level}</span>
-           <span className="text-xs font-bold text-indigo-900">Q {currentQIndex + 1}/5</span>
+           <span className="text-[9px] text-indigo-500 font-black uppercase tracking-[0.3em] block mb-1">Level {level}</span>
+           <span className="text-xl font-black text-slate-900">Q {currentQIndex + 1}/5</span>
         </div>
-        <div>
-           <span className="text-[10px] text-gray-400 uppercase font-bold tracking-wider block text-right">Score</span>
-           <p className="text-xl font-black text-green-600 leading-none">{score}</p>
+        <div className="text-right">
+           <span className="text-[9px] text-orange-500 font-black uppercase tracking-[0.3em] block mb-1">Score</span>
+           <p className="text-3xl font-black text-slate-900 leading-none">{score}</p>
         </div>
       </div>
 
-      {/* Question Card */}
-      <div className="bg-white p-6 rounded-3xl shadow-lg mb-6 flex-1 flex flex-col items-center justify-center text-center border-b-4 border-gray-100">
-        <h2 className="text-lg font-bold text-gray-800 leading-snug">{currentQ.question}</h2>
+      <div className="bg-white border border-slate-100 p-8 rounded-[3rem] shadow-xl mb-8 flex-1 flex flex-col items-center justify-center text-center relative overflow-hidden">
+        <h2 className="text-2xl font-black text-slate-800 leading-tight tracking-tight">{currentQ.question}</h2>
       </div>
 
-      {/* Options */}
-      <div className="grid grid-cols-1 gap-3 mb-8">
+      <div className="grid grid-cols-1 gap-4 mb-10">
         {currentQ.options.map((opt, idx) => {
-            let buttonStyle = "bg-white border-2 border-indigo-100 text-gray-700 hover:border-indigo-400";
-            
+            let style = "bg-white border border-slate-100 text-slate-800";
             if (isAnswered) {
-                if (idx === currentQ.correctIndex) {
-                    buttonStyle = "bg-green-100 border-2 border-green-500 text-green-800"; // Correct Answer
-                } else if (idx === selectedOption) {
-                    buttonStyle = "bg-red-100 border-2 border-red-500 text-red-800"; // Wrong selected
-                } else {
-                    buttonStyle = "bg-gray-50 border-gray-100 text-gray-400 opacity-50"; // Others
-                }
+                if (idx === currentQ.correctIndex) style = "bg-emerald-500 text-white border-emerald-400 shadow-lg";
+                else if (idx === selectedOption) style = "bg-rose-500 text-white border-rose-400 shadow-lg";
+                else style = "bg-white border-slate-50 text-slate-300 opacity-50";
             }
-
             return (
               <button
-                key={idx}
-                disabled={isAnswered}
-                onClick={() => handleAnswer(idx)}
-                className={`p-4 rounded-2xl font-bold transition-all text-left relative overflow-hidden ${buttonStyle} active:scale-98`}
+                key={idx} disabled={isAnswered} onClick={() => handleAnswer(idx)}
+                className={`p-5 rounded-[2rem] font-black text-left transition-all active:scale-[0.98] flex items-center gap-4 ${style}`}
               >
-                <div className="flex items-center z-10 relative">
-                    <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-sm mr-3 font-bold transition-colors ${
-                        isAnswered && idx === currentQ.correctIndex ? 'bg-green-500 text-white' : 
-                        isAnswered && idx === selectedOption ? 'bg-red-500 text-white' : 
-                        'bg-indigo-50 text-indigo-600'
-                    }`}>
-                        {String.fromCharCode(65 + idx)}
-                    </span>
-                    {opt}
-                </div>
+                <span className={`w-8 h-8 rounded-full flex items-center justify-center text-xs border ${isAnswered ? 'border-white/20' : 'border-slate-100 text-indigo-500'}`}>
+                    {String.fromCharCode(65 + idx)}
+                </span>
+                <span className="flex-1">{opt}</span>
               </button>
             )
         })}
-      </div>
-      
-      {/* Footer Hint */}
-      <div className="text-center pb-4">
-          <p className="text-xs text-gray-400">
-              {isAnswered ? "Proceeding to next question..." : "Select an answer to continue"}
-          </p>
       </div>
     </div>
   );

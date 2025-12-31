@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { getAiPartnerResponse } from '../services/geminiService';
+import { getAiPartnerResponseStream } from '../services/geminiService';
 import { Message } from '../types';
 import { INDIAN_LANGUAGES, INTERNATIONAL_LANGUAGES } from '../constants';
 
@@ -7,15 +8,52 @@ const AiPartner: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [nativeLang, setNativeLang] = useState(INDIAN_LANGUAGES[0].name); 
   
   const recognitionRef = useRef<any>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const spokenSentences = useRef<Set<string>>(new Set());
 
-  // --- Chat Logic ---
+  const speakSentence = (sentence: string) => {
+    if ('speechSynthesis' in window && sentence.trim().length > 2) {
+      if (spokenSentences.current.has(sentence)) return;
+      spokenSentences.current.add(sentence);
+
+      setIsSpeaking(true);
+      const utterance = new SpeechSynthesisUtterance(sentence.trim());
+      utterance.lang = 'en-US';
+      
+      const voices = window.speechSynthesis.getVoices();
+      
+      // Try to find the most natural sounding female voice
+      const naturalVoice = voices.find(v => v.name.includes('Natural') && (v.name.includes('English') || v.name.includes('US')));
+      const premiumVoice = voices.find(v => v.name.includes('Premium') && v.name.includes('English'));
+      const samanthaVoice = voices.find(v => v.name.includes('Samantha'));
+      const googleFemaleVoice = voices.find(v => v.name.includes('Google US English'));
+      const anyFemaleVoice = voices.find(v => v.name.toLowerCase().includes('female'));
+
+      const selectedVoice = naturalVoice || premiumVoice || samanthaVoice || googleFemaleVoice || anyFemaleVoice || voices[0];
+      
+      if (selectedVoice) utterance.voice = selectedVoice;
+      
+      // Fine-tuning for more natural prosody
+      utterance.rate = 1.0; // Standard speed for natural feeling
+      utterance.pitch = 1.0; // Natural pitch
+      
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+      
+      window.speechSynthesis.speak(utterance);
+    }
+  };
 
   const handleUserMessage = async (text: string) => {
     if (!text.trim()) return;
+
+    // Reset TTS state
+    window.speechSynthesis.cancel();
+    spokenSentences.current.clear();
 
     const newUserMsg: Message = { id: Date.now().toString(), role: 'user', text };
     setMessages(prev => [...prev, newUserMsg]);
@@ -25,12 +63,31 @@ const AiPartner: React.FC = () => {
         parts: [{ text: m.text }]
     }));
 
-    const aiResponseText = await getAiPartnerResponse(text, history, nativeLang);
-    
-    const newAiMsg: Message = { id: (Date.now() + 1).toString(), role: 'model', text: aiResponseText };
-    setMessages(prev => [...prev, newAiMsg]);
-    
-    speakText(aiResponseText);
+    // Create a placeholder for the AI response
+    const aiMsgId = (Date.now() + 1).toString();
+    const aiPlaceholder: Message = { id: aiMsgId, role: 'model', text: '...' };
+    setMessages(prev => [...prev, aiPlaceholder]);
+    setIsStreaming(true);
+
+    let lastSpokenIndex = 0;
+
+    await getAiPartnerResponseStream(text, history, nativeLang, (streamedText) => {
+      setMessages(prev => prev.map(m => m.id === aiMsgId ? { ...m, text: streamedText } : m));
+      
+      // Attempt to speak sentence-by-sentence as it streams
+      // Only speak the English part (before |||)
+      const englishPart = streamedText.split('|||')[0];
+      const sentences = englishPart.match(/[^.!?]+[.!?]+/g);
+      
+      if (sentences) {
+        for (let i = lastSpokenIndex; i < sentences.length; i++) {
+          speakSentence(sentences[i]);
+          lastSpokenIndex = i + 1;
+        }
+      }
+    });
+
+    setIsStreaming(false);
   };
 
   const handleUserMessageRef = useRef(handleUserMessage);
@@ -39,8 +96,9 @@ const AiPartner: React.FC = () => {
   }); 
 
   useEffect(() => {
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    
+    if (SpeechRecognition) {
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = false;
       recognitionRef.current.lang = 'en-US'; 
@@ -64,41 +122,33 @@ const AiPartner: React.FC = () => {
       };
     }
 
-    const greeting = "Hi! I'm Sonia, your English partner. How are you today?";
+    // Ensure voices are loaded
+    window.speechSynthesis.getVoices();
+
+    const greeting = "Hi! I'm Sonia, your English partner. Ready for a quick chat?|||Namaste! Main Sonia hoon, aapki English partner. Kya aap baat karne ke liye taiyaar hain?";
     setMessages([{ id: 'init', role: 'model', text: greeting }]);
-    speakText(greeting);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    
+    // Initial greeting handling
+    const initialEng = greeting.split('|||')[0];
+    setTimeout(() => {
+      speakSentence(initialEng);
+    }, 1000); // Slight delay for better voice initialization
   }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const speakText = (text: string) => {
-    if ('speechSynthesis' in window) {
-      const textToSpeak = text.split('|||')[0];
-
-      setIsSpeaking(true);
-      const utterance = new SpeechSynthesisUtterance(textToSpeak);
-      
-      const voices = window.speechSynthesis.getVoices();
-      const femaleVoice = voices.find(voice => voice.name.includes('Female') || voice.name.includes('Samantha') || voice.name.includes('Google US English'));
-      if (femaleVoice) utterance.voice = femaleVoice;
-      
-      utterance.rate = 1; 
-      utterance.pitch = 1.1; 
-
-      utterance.onend = () => setIsSpeaking(false);
-      window.speechSynthesis.cancel(); 
-      window.speechSynthesis.speak(utterance);
-    }
-  };
-
   const toggleListening = () => {
+    if (!recognitionRef.current) {
+      alert("Speech recognition is not supported in your browser.");
+      return;
+    }
+
     if (isListening) {
       recognitionRef.current?.stop();
     } else {
-      if(isSpeaking) window.speechSynthesis.cancel();
+      if(isSpeaking || isStreaming) window.speechSynthesis.cancel();
       recognitionRef.current?.start();
       setIsListening(true);
     }
@@ -107,73 +157,67 @@ const AiPartner: React.FC = () => {
   const allLanguages = [...INDIAN_LANGUAGES, ...INTERNATIONAL_LANGUAGES];
   
   return (
-    <div className="flex flex-col h-full bg-gray-50 relative">
+    <div className="flex flex-col h-full bg-slate-50 relative overflow-hidden">
       
-      {/* Top Header */}
-      <div className="bg-white shadow-sm pl-14 pr-4 py-3 flex items-center justify-between z-20 min-h-[64px]">
-        <div className="flex items-center gap-3">
+      {/* Header */}
+      <div className="absolute top-0 left-0 right-0 bg-white/90 backdrop-blur-xl px-6 pt-16 pb-6 flex items-center justify-between z-30 border-b border-slate-100">
+        <div className="flex items-center gap-4">
           <div className="relative">
-            <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center border-2 border-indigo-500 overflow-hidden">
-               <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Sonia&gender=female" alt="Sonia" className="w-full h-full" />
+            <div className="w-14 h-14 rounded-[1.8rem] bg-indigo-50 border-2 border-white shadow-lg overflow-hidden p-1">
+               <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Sonia&gender=female" alt="Sonia" className="w-full h-full scale-110" />
             </div>
-            <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
+            <div className={`absolute bottom-1 right-1 w-3 h-3 border-2 border-white rounded-full ${isStreaming ? 'bg-indigo-500 animate-ping' : 'bg-emerald-500'}`}></div>
           </div>
           <div>
-            <h3 className="font-bold text-gray-800 leading-tight">Sonia</h3>
-            <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wide">English Tutor</p>
+            <h3 className="font-black text-slate-900 text-lg leading-tight tracking-tight">Sonia</h3>
+            <div className="flex items-center gap-1.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${isStreaming ? 'bg-indigo-500 animate-pulse' : 'bg-indigo-500'}`}></span>
+              <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">
+                {isStreaming ? 'Thinking...' : 'Active Now'}
+              </p>
+            </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 pointer-events-auto">
-            <label htmlFor="lang-select" className="text-[10px] text-gray-400 font-bold uppercase tracking-wide hidden sm:block">Translate:</label>
-            <div className="relative bg-gray-100 rounded-lg px-2 py-1.5 flex items-center border border-gray-200">
-                <span className="text-xs mr-1">🌐</span>
-                <select 
-                    id="lang-select"
-                    value={nativeLang}
-                    onChange={(e) => setNativeLang(e.target.value)}
-                    className="bg-transparent text-xs font-bold text-gray-800 outline-none cursor-pointer appearance-none pr-6 z-10 relative"
-                    style={{ minWidth: '80px' }}
-                >
-                    {allLanguages.map((lang) => (
-                        <option key={lang.code} value={lang.name}>{lang.name}</option>
-                    ))}
-                </select>
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none z-0">
-                    <svg className="w-3 h-3 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path>
-                    </svg>
-                </div>
-            </div>
+        <div className="relative">
+            <select 
+                value={nativeLang}
+                onChange={(e) => setNativeLang(e.target.value)}
+                className="bg-slate-100 rounded-2xl px-4 py-2 text-[10px] font-black text-slate-800 outline-none border border-slate-100 appearance-none pr-8 uppercase tracking-widest"
+            >
+                {allLanguages.map((lang) => (
+                    <option key={lang.code} value={lang.name}>{lang.name}</option>
+                ))}
+            </select>
         </div>
       </div>
 
       {/* Chat Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-gradient-to-b from-gray-50 to-white">
+      <div className="flex-1 overflow-y-auto pt-44 pb-32 px-6 space-y-8 no-scrollbar">
         {messages.map((msg) => {
-          const [englishText, translation] = msg.text.split('|||');
           const isUser = msg.role === 'user';
+          const [englishText, translation] = msg.text.split('|||');
           
           return (
-            <div key={msg.id} className={`flex items-end gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-              
-              <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 border border-gray-100">
-                {isUser ? (
-                   <div className="w-full h-full bg-gray-200 flex items-center justify-center text-gray-500 text-xs font-bold">YOU</div>
-                ) : (
-                   <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Sonia&gender=female" alt="Sonia" className="w-full h-full bg-indigo-50" />
-                )}
-              </div>
-
-              <div className={`max-w-[80%] rounded-2xl p-3 shadow-sm ${
+            <div key={msg.id} className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}>
+              <div className={`relative px-5 py-4 shadow-xl transition-all duration-300 ${
                 isUser 
-                  ? 'bg-indigo-600 text-white rounded-br-none' 
-                  : 'bg-white text-gray-800 rounded-bl-none border border-gray-100'
-              }`}>
-                <p className={`text-[15px] leading-relaxed ${isUser ? 'text-white' : 'text-gray-800'}`}>{englishText}</p>
+                  ? 'bg-slate-900 text-white rounded-[2rem] rounded-tr-lg' 
+                  : 'bg-white text-slate-800 rounded-[2.2rem] rounded-tl-lg border border-slate-50'
+              } max-w-[85%]`}>
+                <p className={`text-[15px] font-medium leading-relaxed ${isUser ? 'text-white' : 'text-slate-900'}`}>
+                  {englishText}
+                  {!isUser && isStreaming && msg.text === '...' && (
+                    <span className="inline-flex gap-1 ml-2">
+                      <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce"></span>
+                      <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></span>
+                      <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0.4s'}}></span>
+                    </span>
+                  )}
+                </p>
                 {!isUser && translation && (
-                    <div className="mt-2 pt-2 border-t border-gray-100">
-                        <p className="text-xs text-indigo-500 font-medium italic">
+                    <div className="mt-4 pt-3 border-t border-slate-50 animate-in fade-in duration-700">
+                        <p className="text-[11px] text-indigo-600 font-bold italic leading-snug">
                             {translation}
                         </p>
                     </div>
@@ -182,44 +226,32 @@ const AiPartner: React.FC = () => {
             </div>
           );
         })}
-        
-        {(isListening && !isSpeaking) && (
-             <div className="flex justify-end pr-12">
-                 <p className="text-xs text-gray-400 animate-pulse">Listening...</p>
-             </div>
-        )}
-        
         <div ref={chatEndRef} />
       </div>
 
-      {/* Bottom Mic Section */}
-      <div className="p-4 bg-white/80 backdrop-blur-md border-t border-gray-100">
-        <div className="flex flex-col items-center justify-center">
-          
+      {/* Controls */}
+      <div className="absolute bottom-8 left-0 right-0 px-8 flex justify-center pointer-events-none z-50">
+        <div className="pointer-events-auto flex flex-col items-center gap-3">
           <button
             onClick={toggleListening}
-            className={`group relative w-20 h-20 rounded-full flex items-center justify-center transition-all duration-300 shadow-2xl ${
-              isListening 
-                ? 'bg-red-500 scale-110 ring-4 ring-red-100' 
-                : 'bg-indigo-600 hover:scale-105 hover:bg-indigo-700'
+            className={`w-24 h-24 rounded-[3rem] flex items-center justify-center transition-all duration-500 shadow-2xl relative group ${
+              isListening ? 'bg-rose-500 scale-110 shadow-rose-200' : 'bg-indigo-600 shadow-indigo-200'
             }`}
           >
-            {isListening && (
-               <span className="absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75 animate-ping"></span>
-            )}
-            
             {isListening ? (
-              <div className="w-8 h-8 bg-white rounded-md z-10 transition-transform transform group-hover:scale-90" />
+              <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" /></svg>
             ) : (
-              <svg className="w-10 h-10 text-white z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
+              <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
               </svg>
             )}
           </button>
           
-          <p className={`mt-3 text-xs font-semibold tracking-wider uppercase ${isListening ? 'text-red-500' : 'text-gray-400'}`}>
-            {isListening ? "Listening..." : isSpeaking ? "Sonia is speaking..." : "Tap to Speak"}
-          </p>
+          <div className="bg-white/90 backdrop-blur-xl px-5 py-2 rounded-full border border-slate-100 shadow-xl">
+            <p className="text-[10px] font-black tracking-[0.2em] uppercase text-slate-500">
+              {isListening ? "Listening..." : isStreaming ? "Sonia is responding..." : "Tap to Speak"}
+            </p>
+          </div>
         </div>
       </div>
     </div>

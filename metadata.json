@@ -1,5 +1,5 @@
 {
-  "name": "B Fluent fully",
+  "name": "B Fluent",
   "description": "A comprehensive English learning application featuring AI courses, AI conversation partners, real-human voice chat, and multiplayer quizzes.",
   "requestFramePermissions": [
     "microphone"

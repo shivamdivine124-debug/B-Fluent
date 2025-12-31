@@ -1,10 +1,12 @@
+
 import React from 'react';
 
 interface PolicyViewerProps {
   pageId: string;
+  onBack?: () => void;
 }
 
-const PolicyViewer: React.FC<PolicyViewerProps> = ({ pageId }) => {
+const PolicyViewer: React.FC<PolicyViewerProps> = ({ pageId, onBack }) => {
   
   const renderContent = () => {
     switch(pageId) {
@@ -36,7 +38,11 @@ const PolicyViewer: React.FC<PolicyViewerProps> = ({ pageId }) => {
 
               <div>
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Email Address</h3>
-                <p className="text-indigo-600 font-medium">bfluent0001@gmail.com</p>
+                <p>
+                    <a href="mailto:bfluent0001@gmail.com" className="text-indigo-600 font-medium hover:underline">
+                        bfluent0001@gmail.com
+                    </a>
+                </p>
               </div>
             </div>
           </div>
@@ -118,7 +124,7 @@ const PolicyViewer: React.FC<PolicyViewerProps> = ({ pageId }) => {
               <p>We use administrative, technical, and physical security measures to help protect your personal information. While we have taken reasonable steps to secure the personal information you provide to us, please be aware that despite our efforts, no security measures are perfect or impenetrable.</p>
 
               <h3 className="text-slate-800 font-bold text-lg mt-6 mb-2">Contact Us</h3>
-              <p>If you have additional questions or require more information about our Privacy Policy, do not hesitate to contact us at bfluent0001@gmail.com.</p>
+              <p>If you have additional questions or require more information about our Privacy Policy, do not hesitate to contact us at <a href="mailto:bfluent0001@gmail.com" className="text-indigo-600 font-medium hover:underline">bfluent0001@gmail.com</a>.</p>
             </div>
           </div>
         );
@@ -129,7 +135,16 @@ const PolicyViewer: React.FC<PolicyViewerProps> = ({ pageId }) => {
   };
 
   return (
-    <div className="h-full bg-slate-50 overflow-y-auto">
+    <div className="h-full bg-slate-50 overflow-y-auto relative">
+      <div className="sticky top-0 bg-white/80 backdrop-blur-md p-4 z-10 border-b border-slate-100 mb-4 pt-16">
+        <button 
+          onClick={onBack}
+          className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest flex items-center gap-2"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M15 19l-7-7 7-7" /></svg>
+          Back
+        </button>
+      </div>
       <div className="p-6 pb-24">
         {renderContent()}
       </div>

@@ -1,13 +1,14 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
 import { User } from '../types';
+import { ZEGO_APP_ID, ZEGO_SERVER_SECRET, ZEGO_TOKEN, ZEGO_SERVER_URL } from '../constants';
+import { generateToken } from '../services/zegoToken';
 
-const rtcConfig = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-  ],
+const formatTime = (seconds: number) => {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 };
 
 interface HumanChatProps {
@@ -15,305 +16,394 @@ interface HumanChatProps {
 }
 
 const HumanChat: React.FC<HumanChatProps> = ({ user }) => {
-  const [status, setStatus] = useState<'idle' | 'searching' | 'connecting' | 'connected' | 'error'>('idle');
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [partnerDisplayName, setPartnerDisplayName] = useState<string | null>(null);
+  const [status, setStatus] = useState<'idle' | 'initializing' | 'searching' | 'connecting' | 'connected' | 'error'>('initializing');
+  const [callDuration, setCallDuration] = useState(0);
+  const [partnerName, setPartnerName] = useState<string | null>(null);
+  const [debugLog, setDebugLog] = useState<string>('Initializing...');
+  const [showTroubleshooting, setShowTroubleshooting] = useState(false);
+  const [errorDetails, setErrorDetails] = useState<string>('');
   
-  const peerConnection = useRef<RTCPeerConnection | null>(null);
-  const localStream = useRef<MediaStream | null>(null);
+  const zgRef = useRef<any>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  
   const lobbyChannel = useRef<any>(null);
-  const callChannel = useRef<any>(null);
-  
-  const selfId = useRef(Math.random().toString(36).substring(7)).current;
-  const isPolite = useRef(false);
+  const selfId = useRef(user?.email?.split('@')[0] + '_' + Math.floor(Math.random()*1000) || 'user_' + Math.floor(Math.random()*1000)).current;
   const currentPartnerId = useRef<string | null>(null);
+  const timerRef = useRef<any>(null);
+
+  const addLog = (msg: string) => {
+    console.log(`[Zego] ${msg}`);
+    setDebugLog(prev => `${msg}\n${prev}`.slice(0, 500));
+  };
 
   useEffect(() => {
+    if (status === 'connected') {
+      timerRef.current = setInterval(() => setCallDuration(p => p + 1), 1000);
+    } else {
+      clearInterval(timerRef.current);
+      setCallDuration(0);
+    }
+    return () => clearInterval(timerRef.current);
+  }, [status]);
+
+  // --- Robust Library Loader ---
+  const loadZegoLibrary = async () => {
+    if ((window as any).ZegoExpressEngine) {
+        addLog("Engine already available.");
+        return;
+    }
+
+    addLog("Attempting to load Voice Engine...");
+
+    const scripts = [
+      "https://www.unpkg.com/zego-express-engine-webrtc@3.4.0/index.js",
+      "https://cdn.jsdelivr.net/npm/zego-express-engine-webrtc@3.4.0/index.js",
+      "https://resource.zegocloud.com/pre-build/ZegoExpressWebRTC-3.4.0.js"
+    ];
+
+    // Try sequentially to ensure stability
+    for (const src of scripts) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = src;
+          script.async = true;
+          script.crossOrigin = "anonymous";
+          
+          script.onload = () => {
+            if ((window as any).ZegoExpressEngine) {
+              resolve();
+            } else {
+              reject("Script loaded but Engine missing");
+            }
+          };
+          script.onerror = () => reject("Network blocked");
+          document.head.appendChild(script);
+        });
+        
+        addLog(`Successfully loaded from: ${new URL(src).hostname}`);
+        return; 
+      } catch (e) {
+        addLog(`Failed source ${new URL(src).hostname}: ${e}`);
+      }
+    }
+
+    // Last resort: ESM Import
+    try {
+        addLog("Trying fallback ESM import...");
+        // @ts-ignore
+        const mod = await import("https://esm.sh/zego-express-engine-webrtc@3.4.0");
+        if (mod && mod.ZegoExpressEngine) {
+            (window as any).ZegoExpressEngine = mod.ZegoExpressEngine;
+            addLog("Loaded via ESM");
+            return;
+        }
+    } catch (e) {
+        addLog("ESM fallback failed.");
+    }
+
+    throw new Error("Unable to load Voice Engine from any source. Please check your internet connection.");
+  };
+
+  useEffect(() => {
+    let mounted = true;
+
+    const initEngine = async () => {
+        // 1. Security Check
+        if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+            const msg = "Microphone requires HTTPS.";
+            addLog(msg);
+            if(mounted) { setErrorDetails(msg); setStatus('error'); }
+            return;
+        }
+
+        if (!ZEGO_APP_ID) {
+            if(mounted) { setErrorDetails("AppID Missing in Config"); setStatus('error'); }
+            return;
+        }
+
+        try {
+            // 2. Load Library
+            await loadZegoLibrary();
+            
+            if (!mounted) return;
+
+            const ZegoEngineClass = (window as any).ZegoExpressEngine;
+            // Use provided server URL or let Zego decide (passing empty string usually defaults to global, but we use the one from config)
+            const server = ZEGO_SERVER_URL || undefined; 
+            
+            addLog(`Initializing Engine (ID: ${ZEGO_APP_ID})...`);
+            
+            // 3. Initialize
+            const result = new ZegoEngineClass(Number(ZEGO_APP_ID), server);
+            
+            // 4. System Check
+            const sys = await result.checkSystemRequirements();
+            if (!sys.webRTC) {
+                 const msg = "Your browser does not support WebRTC calls.";
+                 addLog(msg);
+                 if(mounted) { setErrorDetails(msg); setStatus('error'); }
+                 return;
+            }
+
+            zgRef.current = result;
+            addLog("Engine Ready.");
+            if(mounted) setStatus('idle');
+
+            // 5. Setup Listeners
+            result.on('roomStreamUpdate', async (roomID: string, updateType: string, streamList: any[]) => {
+                if (updateType === 'ADD') {
+                    const streamID = streamList[0].streamID;
+                    addLog("Incoming Audio Stream...");
+                    try {
+                        const remoteStream = await result.startPlayingStream(streamID);
+                        remoteStreamRef.current = remoteStream;
+                        const audio = new Audio();
+                        audio.srcObject = remoteStream;
+                        audio.play().catch(e => addLog("Autoplay blocked: tap to hear"));
+                        setStatus('connected');
+                    } catch (err: any) {
+                        addLog(`Stream Error: ${err.message}`);
+                    }
+                } else if (updateType === 'DELETE') {
+                    endCall();
+                }
+            });
+
+            result.on('roomUserUpdate', (roomID: string, updateType: string) => {
+                if (updateType === 'DELETE') endCall();
+            });
+
+        } catch (e: any) {
+            const msg = e.message || "Unknown Initialization Error";
+            addLog(`CRITICAL: ${msg}`);
+            if(mounted) {
+                setErrorDetails(msg);
+                setStatus('error');
+            }
+        }
+    };
+
+    initEngine();
+
     return () => {
-      endCall();
+        mounted = false;
+        if (zgRef.current) {
+            try {
+                zgRef.current.destroyEngine();
+            } catch (e) { /* ignore */ }
+            zgRef.current = null;
+        }
     };
   }, []);
 
-  const extractNameFromEmail = (email: string) => {
-    if (!email) return "Learner";
-    return email.split('@')[0];
+  const startZegoCall = async (roomID: string, role: 'host' | 'joiner') => {
+    const zg = zgRef.current;
+    if (!zg) {
+        addLog("Engine lost. Reloading...");
+        window.location.reload();
+        return;
+    }
+
+    try {
+        let token = ZEGO_TOKEN;
+        if (!token && ZEGO_SERVER_SECRET) {
+            addLog("Generating Token...");
+            token = generateToken(Number(ZEGO_APP_ID), ZEGO_SERVER_SECRET, selfId);
+        }
+        
+        if (!token) { 
+            addLog("Token Gen Failed. Check Console."); 
+            setErrorDetails("Security Token Generation Failed");
+            setStatus('error'); 
+            return; 
+        }
+        
+        addLog(`Joining Room: ${roomID}`);
+        await zg.loginRoom(roomID, token, { userID: selfId, userName: selfId });
+        
+        const localStream = await zg.createStream({ camera: { video: false, audio: true } });
+        localStreamRef.current = localStream;
+        
+        zg.startPublishingStream(roomID + '_' + selfId, localStream);
+        addLog("Microphone Active. Publishing...");
+
+    } catch (err: any) {
+        const msg = err.message || "Connection Error";
+        addLog(`Call Failed: ${msg}`);
+        setErrorDetails(msg);
+        setStatus('error');
+    }
   };
 
   const endCall = () => {
-    if (peerConnection.current) {
-      peerConnection.current.close();
-      peerConnection.current = null;
-    }
-    if (localStream.current) {
-      localStream.current.getTracks().forEach(track => track.stop());
-      localStream.current = null;
+    const zg = zgRef.current;
+    if (zg) {
+        zg.logoutRoom();
+        if (localStreamRef.current) {
+            zg.destroyStream(localStreamRef.current);
+            localStreamRef.current = null;
+        }
     }
     if (lobbyChannel.current) {
-      lobbyChannel.current.track({ status: 'idle', email: user?.email });
-      supabase.removeChannel(lobbyChannel.current);
-      lobbyChannel.current = null;
+        supabase.removeChannel(lobbyChannel.current);
+        lobbyChannel.current = null;
     }
-    if (callChannel.current) {
-      supabase.removeChannel(callChannel.current);
-      callChannel.current = null;
-    }
-    currentPartnerId.current = null;
     setStatus('idle');
-    setRemoteStream(null);
-    setPartnerDisplayName(null);
+    setPartnerName(null);
+    currentPartnerId.current = null;
   };
 
-  const setupPeerConnection = (signalingChannel: any) => {
-    const pc = new RTCPeerConnection(rtcConfig);
-    peerConnection.current = pc;
-
-    if (localStream.current) {
-      localStream.current.getTracks().forEach(track => {
-        pc.addTrack(track, localStream.current!);
-      });
-    }
-
-    pc.ontrack = (event) => {
-      console.log("Remote track received");
-      if (event.streams && event.streams[0]) {
-        setRemoteStream(event.streams[0]);
-        setStatus('connected');
-      }
-    };
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        signalingChannel.send({
-          type: 'broadcast',
-          event: 'signal',
-          payload: { candidate: event.candidate, from: selfId }
-        });
-      }
-    };
-
-    pc.onnegotiationneeded = async () => {
-      try {
-        await pc.setLocalDescription();
-        signalingChannel.send({
-          type: 'broadcast',
-          event: 'signal',
-          payload: { description: pc.localDescription, from: selfId }
-        });
-      } catch (err) {
-        console.error("Negotiation Error:", err);
-      }
-    };
-
-    return pc;
-  };
-
-  const startCallWith = async (otherId: string, otherEmail: string) => {
-    if (currentPartnerId.current) return;
-    currentPartnerId.current = otherId;
-    setPartnerDisplayName(extractNameFromEmail(otherEmail));
-    setStatus('connecting');
-    
-    // Create a unique private channel for these two users only
-    const channelName = `call_${[selfId, otherId].sort().join('_')}`;
-    const channel = supabase.channel(channelName);
-    callChannel.current = channel;
-
-    isPolite.current = selfId.localeCompare(otherId) > 0;
-
-    channel
-      .on('broadcast', { event: 'signal' }, async ({ payload }) => {
-        const pc = peerConnection.current;
-        if (!pc || payload.from === selfId) return;
-
-        try {
-          if (payload.description) {
-            const offerCollision = (payload.description.type === 'offer') && 
-                                   (pc.signalingState !== 'stable');
-            
-            const ignoreOffer = !isPolite.current && offerCollision;
-            if (ignoreOffer) return;
-
-            await pc.setRemoteDescription(payload.description);
-            if (payload.description.type === 'offer') {
-              await pc.setLocalDescription();
-              channel.send({
-                type: 'broadcast',
-                event: 'signal',
-                payload: { description: pc.localDescription, from: selfId }
-              });
-            }
-          } else if (payload.candidate) {
-            try {
-              await pc.addIceCandidate(payload.candidate);
-            } catch (e) {
-              if (!isPolite.current) throw e;
-            }
-          }
-        } catch (err) {
-          console.error("Signaling error:", err);
-        }
-      })
-      .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          setupPeerConnection(channel);
-        }
-      });
-  };
-
-  const startSearch = async () => {
+  const startSearch = () => {
     if (!isSupabaseConfigured) {
+        alert("Server not configured properly.");
+        return;
+    }
+    if (!zgRef.current) {
         setStatus('error');
         return;
     }
 
     setStatus('searching');
-    
-    try {
-      localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    } catch (err) {
-      alert("Microphone access is required for Global Connect.");
-      setStatus('idle');
-      return;
-    }
+    addLog("Entering Global Lobby...");
 
-    const lobby = supabase.channel('global_matchmaking', {
-      config: { presence: { key: selfId } }
-    });
+    const lobby = supabase.channel('global_matchmaking', { config: { presence: { key: selfId } } });
     lobbyChannel.current = lobby;
 
     lobby
       .on('presence', { event: 'sync' }, () => {
-        if (currentPartnerId.current) return;
-        
+        if (currentPartnerId.current || status === 'connected') return;
         const state = lobby.presenceState();
-        const users = Object.keys(state);
+        const me = selfId;
+        const partnerID = Object.keys(state).find(id => id !== me);
         
-        // Matchmaking logic: 
-        // We only initiate if we are the "lower" ID to avoid duplicate attempts
-        const potentialPartner = users.find(id => {
-          const userState = (state[id] as any)[0];
-          return id !== selfId && 
-                 userState.status === 'searching' && 
-                 selfId.localeCompare(id) < 0; // The one with lower ID initiates
-        });
-
-        if (potentialPartner) {
-          const partnerEmail = (state[potentialPartner] as any)[0].email;
-          // Send an invite broadcast to that specific person
-          lobby.send({
-            type: 'broadcast',
-            event: 'match_invite',
-            payload: { to: potentialPartner, from: selfId, fromEmail: user?.email }
-          });
+        if (partnerID && me < partnerID) {
+            addLog(`Partner Found: ${partnerID}`);
+            const roomID = `room_${me}_${partnerID}`;
+            currentPartnerId.current = partnerID;
+            lobby.send({ type: 'broadcast', event: 'invite', payload: { roomID, to: partnerID, from: me } });
+            setPartnerName(partnerID);
+            setStatus('connecting');
+            startZegoCall(roomID, 'host');
         }
       })
-      .on('broadcast', { event: 'match_invite' }, async ({ payload }) => {
-        // Only respond if the invite is for us AND we are still searching
-        if (payload.to === selfId && !currentPartnerId.current && status === 'searching') {
-          // Send match accept
-          lobby.send({
-            type: 'broadcast',
-            event: 'match_accept',
-            payload: { to: payload.from, from: selfId, fromEmail: user?.email }
-          });
-          
-          await lobby.track({ status: 'busy', email: user?.email });
-          startCallWith(payload.from, payload.fromEmail);
-        }
+      .on('broadcast', { event: 'invite' }, ({ payload }) => {
+          if (payload.to === selfId && !currentPartnerId.current) {
+              addLog(`Accepting Invite from ${payload.from}`);
+              currentPartnerId.current = payload.from;
+              setPartnerName(payload.from);
+              setStatus('connecting');
+              startZegoCall(payload.roomID, 'joiner');
+          }
       })
-      .on('broadcast', { event: 'match_accept' }, async ({ payload }) => {
-        // If we get an acceptance for an invite we sent
-        if (payload.to === selfId && !currentPartnerId.current) {
-          await lobby.track({ status: 'busy', email: user?.email });
-          startCallWith(payload.from, payload.fromEmail);
-        }
-      })
-      .subscribe(async (subStatus) => {
-        if (subStatus === 'SUBSCRIBED') {
-          await lobby.track({ status: 'searching', email: user?.email });
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await lobby.track({ online_at: new Date().toISOString() });
         }
       });
   };
 
   return (
-    <div className="flex flex-col items-center justify-center h-full bg-slate-900 text-white p-6 relative overflow-hidden">
-      <div className="absolute inset-0 z-0 opacity-20">
-         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-500 rounded-full blur-3xl animate-pulse"></div>
-      </div>
-
-      <div className="z-10 flex flex-col items-center w-full">
-        <div className="mb-2 bg-indigo-500/20 px-3 py-1 rounded-full border border-indigo-500/30">
-          <span className="text-[10px] font-black uppercase tracking-widest text-indigo-300">1-on-1 Voice Call</span>
-        </div>
-        
-        <h2 className="text-2xl font-black mb-8">
-            {status === 'connected' ? "Call in Progress" : "Global Connect"}
-        </h2>
-
-        <div className="w-48 h-48 rounded-full border-4 border-white/10 bg-white/5 flex items-center justify-center mb-8 relative">
-           {(status === 'searching' || status === 'connecting' || status === 'connected') && (
-             <div className={`absolute inset-0 border-4 ${status === 'connected' ? 'border-green-500' : 'border-indigo-500'} rounded-full animate-ping opacity-75`}></div>
-           )}
-           
-           <div className={`w-full h-full rounded-full flex items-center justify-center transition-all duration-500 ${
-               status === 'connected' ? 'bg-gradient-to-br from-green-500 to-emerald-600 scale-110 shadow-2xl shadow-green-500/20' : 'bg-white/5'
-           }`}>
-                {status === 'connected' ? (
-                    <span className="text-5xl animate-bounce">🎙️</span>
-                ) : (
-                    <svg className="w-20 h-20 text-white/20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
-                    </svg>
-                )}
-           </div>
-        </div>
-
-        <div className="h-24 text-center flex flex-col items-center justify-center mb-8">
-          <p className="text-xl font-black text-white">
-            {status === 'idle' && "Find a learning partner"}
-            {status === 'searching' && "Matching you with someone..."}
-            {status === 'connecting' && "Setting up secure call..."}
-            {status === 'connected' && `Connected with ${partnerDisplayName}`}
-            {status === 'error' && "System Offline"}
-          </p>
-          {status === 'searching' && (
-              <p className="text-xs text-indigo-300 uppercase tracking-widest font-bold mt-2 animate-pulse">Lobby is active</p>
-          )}
-          {status === 'connected' && (
-              <div className="mt-2 flex items-center gap-2">
-                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                  <span className="text-xs text-green-400 font-bold uppercase tracking-widest">Live Private Session</span>
-              </div>
-          )}
-        </div>
-        
-        {status === 'idle' || status === 'error' ? (
-          <button
-            onClick={startSearch}
-            className="group relative h-16 w-64"
-          >
-            <div className="absolute inset-0 bg-indigo-600 rounded-full blur-lg opacity-50 group-hover:opacity-100 transition duration-300"></div>
-            <div className="relative h-full bg-indigo-600 hover:bg-indigo-500 rounded-full flex items-center justify-center gap-3 font-black text-lg transition-all transform active:scale-95 shadow-xl border border-indigo-400/30">
-              <span className="text-2xl">⚡</span> Start Searching
-            </div>
-          </button>
-        ) : (
-          <button
-            onClick={endCall}
-            className="px-12 py-4 bg-red-500 hover:bg-red-600 rounded-full font-black text-lg shadow-lg shadow-red-500/30 transition transform hover:scale-105 border border-red-400/30"
-          >
-            {status === 'connected' ? "End Call" : "Stop Searching"}
-          </button>
+    <div className="h-full bg-slate-900 flex flex-col p-8 font-sans overflow-hidden">
+      <div className="flex-1 flex flex-col items-center justify-center text-center">
+        {status === 'idle' && (
+          <div className="animate-in fade-in zoom-in duration-500">
+            <div className="w-24 h-24 bg-white/5 rounded-[2.5rem] flex items-center justify-center text-4xl mb-8 border border-white/10 mx-auto">🌍</div>
+            <h2 className="text-3xl font-black text-white mb-3 tracking-tight">Global Connect</h2>
+            <p className="text-slate-400 font-medium mb-12 max-w-[240px] mx-auto leading-relaxed">Connect with a random partner from around the world to practice English.</p>
+            <button 
+                onClick={startSearch}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white px-10 py-5 rounded-2xl font-black text-lg shadow-2xl shadow-indigo-600/20 active:scale-95 transition-all"
+            >
+              Start Matching
+            </button>
+          </div>
         )}
 
-        <audio 
-            autoPlay 
-            ref={audio => { 
-                if (audio && remoteStream) {
-                    audio.srcObject = remoteStream;
-                }
-            }} 
-        />
+        {status === 'searching' && (
+           <div className="animate-in fade-in duration-500">
+             <div className="relative w-40 h-40 mb-12 mx-auto">
+               <div className="absolute inset-0 bg-indigo-500/20 rounded-full animate-ping"></div>
+               <div className="absolute inset-4 bg-indigo-500/30 rounded-full animate-ping" style={{animationDelay: '0.2s'}}></div>
+               <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-20 h-20 bg-indigo-600 rounded-full flex items-center justify-center text-3xl shadow-2xl border-4 border-slate-900">🔍</div>
+               </div>
+             </div>
+             <h2 className="text-2xl font-black text-white mb-2">Searching...</h2>
+             <p className="text-slate-500 font-bold text-[10px] uppercase tracking-[0.4em]">Finding your partner</p>
+             <button onClick={endCall} className="mt-16 text-slate-500 font-black text-[10px] uppercase tracking-widest hover:text-white transition">Cancel Search</button>
+           </div>
+        )}
+
+        {(status === 'connecting' || status === 'connected') && (
+           <div className="w-full max-w-sm animate-in zoom-in fade-in duration-500">
+              <div className="bg-white/5 rounded-[3rem] p-10 border border-white/10 mb-8 shadow-2xl backdrop-blur-xl relative overflow-hidden">
+                 <div className="absolute top-0 right-0 p-8 opacity-10">
+                    <svg className="w-32 h-32 text-indigo-500" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg>
+                 </div>
+                 <div className="relative z-10">
+                    <div className="w-24 h-24 bg-indigo-500/20 rounded-[2rem] flex items-center justify-center text-4xl mb-6 mx-auto border border-indigo-500/30">👤</div>
+                    <h3 className="text-2xl font-black text-white mb-1">{partnerName || 'Partner'}</h3>
+                    {status === 'connecting' ? (
+                       <p className="text-indigo-400 font-black text-[10px] uppercase tracking-widest animate-pulse">Establishing Link...</p>
+                    ) : (
+                       <div className="flex flex-col items-center gap-2">
+                         <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                            <p className="text-emerald-400 font-black text-[10px] uppercase tracking-widest">Connected</p>
+                         </div>
+                         <p className="text-4xl font-black text-white mt-4 font-mono">{formatTime(callDuration)}</p>
+                       </div>
+                    )}
+                 </div>
+              </div>
+
+              <button 
+                onClick={endCall}
+                className="w-20 h-20 bg-rose-500 text-white rounded-full flex items-center justify-center shadow-2xl shadow-rose-500/20 active:scale-90 transition-all mx-auto hover:bg-rose-600"
+              >
+                <svg className="w-10 h-10" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+              </button>
+           </div>
+        )}
+
+        {(status === 'initializing' || status === 'error') && (
+           <div className="p-8 text-center animate-in shake duration-500">
+              {status === 'error' ? (
+                <>
+                  <div className="w-20 h-20 bg-rose-500/10 rounded-full flex items-center justify-center text-3xl mb-6 mx-auto text-rose-500">⚠️</div>
+                  <h2 className="text-2xl font-black text-white mb-3">Connection Failed</h2>
+                  <p className="text-slate-500 font-medium mb-8 max-w-[240px] mx-auto text-xs leading-relaxed">
+                    {errorDetails || "Network firewall or browser restriction detected."}
+                  </p>
+                </>
+              ) : (
+                <>
+                   <div className="w-16 h-16 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-6 mx-auto"></div>
+                   <h2 className="text-xl font-black text-white mb-3">Initializing...</h2>
+                   <p className="text-slate-500 text-xs mb-8">Connecting to secure voice servers</p>
+                </>
+              )}
+              
+              {status === 'error' && (
+                <button onClick={() => window.location.reload()} className="bg-white text-slate-900 px-8 py-4 rounded-2xl font-black shadow-xl active:scale-95 transition-all">Retry Connection</button>
+              )}
+              
+              <button 
+                onClick={() => setShowTroubleshooting(!showTroubleshooting)}
+                className="block mt-8 text-slate-600 text-[10px] font-black uppercase tracking-widest mx-auto hover:text-slate-400"
+              >
+                {showTroubleshooting ? 'Hide Debug Logs' : 'Show Debug Logs'}
+              </button>
+              
+              {showTroubleshooting && (
+                <div className="mt-4 p-4 bg-black/40 rounded-xl text-left font-mono text-[9px] text-emerald-400/80 overflow-x-auto max-h-40 border border-white/5 whitespace-pre-wrap">
+                    {debugLog}
+                </div>
+              )}
+           </div>
+        )}
       </div>
     </div>
   );

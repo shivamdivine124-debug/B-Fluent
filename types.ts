@@ -1,7 +1,10 @@
+
 export interface User {
   id: string;
   email: string;
   isSubscribed: boolean;
+  completedDays?: number[];
+  quizScore?: number;
 }
 
 export enum AppRoute {
@@ -9,6 +12,7 @@ export enum AppRoute {
   AUTH = 'AUTH',
   COURSE = 'COURSE',
   AI_PARTNER = 'AI_PARTNER',
+  AI_SOLVER = 'AI_SOLVER',
   HUMAN_CHAT = 'HUMAN_CHAT',
   QUIZ = 'QUIZ',
   POLICY = 'POLICY',
@@ -24,7 +28,7 @@ export interface Language {
 export interface DayPlan {
   day: number;
   title: string;
-  content: string; // Markdown content from Gemini
+  content: string;
 }
 
 export interface Message {
